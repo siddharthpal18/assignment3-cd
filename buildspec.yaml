@@ -5,15 +5,21 @@ phases:
     commands:
       - echo Logging in to Amazon ECR...
       - $(aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin 285951302175.dkr.ecr.us-east-2.amazonaws.com)
+
   build:
     commands:
       - echo Build started on `date`
       - echo Building Docker image...
       - docker build -t pal-flask-app .
       - docker tag pal-flask-app:latest 285951302175.dkr.ecr.us-east-2.amazonaws.com/pal-flask-app:latest
+
   post_build:
     commands:
       - echo Pushing Docker image...
       - docker push 285951302175.dkr.ecr.us-east-2.amazonaws.com/pal-flask-app:latest
+      - echo Writing imagedefinitions.json...
+      - printf '[{"name":"pal-flask-container","imageUri":"285951302175.dkr.ecr.us-east-2.amazonaws.com/pal-flask-app:latest"}]' > imagedefinitions.json
+
 artifacts:
-  files: '**/*'
+  files:
+    - imagedefinitions.json

@@ -5,10 +5,13 @@ Parameters:
   GitHubRepo:
     Type: String
     Description: GitHub repository (e.g., username/repo)
+    Default: siddharthpal18/assignment3-cd
+
   GitHubBranch:
     Type: String
-    Default: main
     Description: GitHub branch name
+    Default: main
+
   GitHubToken:
     Type: String
     NoEcho: true
