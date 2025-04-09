@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Pal - ECS Fargate Flask App with CI/CD, ALB, and Secure VPC'
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository (e.g., username/repo)
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub branch name
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub personal access token (OAuth)
+
+Resources:
+
+  PalVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: pal-vpc
+
+  PalInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  PalAttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref PalVPC
+      InternetGatewayId: !Ref PalInternetGateway
+
+  PalPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      AvailabilityZone: us-east-2a
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: pal-public-subnet-1
+
+  PalPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      AvailabilityZone: us-east-2b
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: pal-public-subnet-2
+
+  PalPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      AvailabilityZone: us-east-2a
+      CidrBlock: 10.0.3.0/24
+      Tags:
+        - Key: Name
+          Value: pal-private-subnet-1
+
+  PalPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PalVPC
+      AvailabilityZone: us-east-2b
+      CidrBlock: 10.0.4.0/24
+      Tags:
+        - Key: Name
+          Value: pal-private-subnet-2
+
+  PalECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: pal-ecs-cluster
+
+  PalALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref PalVPC
+      GroupDescription: Allow HTTP from internet
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  PalContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref PalVPC
+      GroupDescription: Allow ALB to talk to ECS tasks
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref PalALBSecurityGroup
+
+  PalLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: pal-alb
+      Subnets:
+        - !Ref PalPublicSubnet1
+        - !Ref PalPublicSubnet2
+      SecurityGroups:
+        - !Ref PalALBSecurityGroup
+      Scheme: internet-facing
+      Type: application
+
+  PalTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: pal-target-group
+      VpcId: !Ref PalVPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /
+
+  PalALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PalLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PalTargetGroup
+
+  PalECRRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: pal-flask-app
+
+  PalTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  PalTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: pal-flask-task
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt PalTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: pal-flask-container
+          Image: 285951302175.dkr.ecr.us-east-2.amazonaws.com/pal-flask-app:latest
+          PortMappings:
+            - ContainerPort: 80
+
+  PalECSService:
+    Type: AWS::ECS::Service
+    DependsOn: PalALBListener
+    Properties:
+      Cluster: !Ref PalECSCluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PalPrivateSubnet1
+            - !Ref PalPrivateSubnet2
+          SecurityGroups:
+            - !Ref PalContainerSecurityGroup
+      LoadBalancers:
+        - ContainerName: pal-flask-container
+          ContainerPort: 80
+          TargetGroupArn: !Ref PalTargetGroup
+      TaskDefinition: !Ref PalTaskDefinition
+
+Outputs:
+  LoadBalancerDNS:
+    Description: Public URL for Flask App
+    Value: !GetAtt PalLoadBalancer.DNSName
